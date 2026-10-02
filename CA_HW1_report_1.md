@@ -1,8 +1,3 @@
----
-title: Computer Architecture HW1
-
----
-
 # Computer Architecture HW1
 [toc]
 
@@ -416,7 +411,7 @@ static int ida_dfs(state_t s, int g, int bound, int last_f, int *next_bound) {
 
 ### 3.3 IDA_solver_improv.c - A imporvement version for IDA_solver.c
 
-在 IDA_solver.c 中，存在著一些不適合於 RV32_ISS 上運行的指令，如: mod 3 運算、recursive 運算等。在本段落中，我們嘗試針對幾種方向進行優化，以便在 Stage 4 中能夠編譯成 RISCV 的版本。我們優化的方向將包含: 引入轉移表並簡化狀態 rank 運算、改為非遞迴搜尋。簡化乘法/除法/mod運算的部分我們將留到 Stage 4 進行
+在 IDA_solver.c 中，存在著一些不適合於 Ripes (guest) 上運行的指令，如: mod 3 運算、recursive 運算等。在本段落中，我們嘗試針對幾種方向進行優化，以便在 Stage 4 中能夠編譯成 RISCV 的版本。我們優化的方向將包含: 引入轉移表並簡化狀態 rank 運算、改為非遞迴搜尋、簡化 orientation 運算。
 
 ---
 
@@ -488,43 +483,3 @@ static void init_transition_tables(void)
 可以從 transition pair calls 與原本的 ida_dfs calls 數量相同的結果，來確認搜尋樹的結構未改變，但是因為改用查詢 transition table 的方式，H3 的速度大幅上升，側面驗證目前的 IDA_solver_improv.c 在執行的時間有了顯著的加快
 
 ---
-* 改為非遞迴搜尋: RV32_ISS 無法進行遞迴，因此我們將修正原本 ida_dfs 中透過呼叫遞迴來探索 searching tree 的作法，透過呼叫一個 stack 來保存每一次動作的紀錄與探索狀況
-
-首先，我們將每個魔術方塊的執行動作都以一個 frame 為單位，結構如下
-```clike=
-/* 額外定義每個動作的 frame, 裡面包含的內容如下 */
-typedef struct {
-    coord_t state;          // 當前狀態
-    coord_t turned;         // 轉動後的狀態
-    uint8_t last_face;      // 上一層轉的面，用來跳過同面連轉
-    uint8_t next_face;      // 下一層轉的面，返回後要繼續探索的位置
-    uint8_t next_quarter;   // 該面的下一種轉法
-    bool    entered;        // 該 frame 是否已經做過 heuristic / goal 檢查 
-} frame_t;
-```
- 接著，我們在 `ida_search_iterative` 中實做了我們新版的搜尋方法，以下是幾個重點
- 1. 呼叫 `frame_t stack` 來記錄每一個 frame，並用一個 `top` 來指向目前正在處理的 frame。每有一個新的 frame 被 push 進 stack 中，`top` 便會加一，因此 `top` 可視為 ida 中的 $g$
- 2. 當目前的 frame 尚未被探索過時，計算 $f$ 值，如果大於 bound 則看條件更新 `next_bound`，然後 pop 回去父 frame，並標記已探索
- 3. 確認以下狀況，若滿足則觸發剪枝: 當前 stack 超出最大空間、該層的所有面全部探索完、上一個 frame 與現在轉動的面相同
- 4. 當前的 frame 透過 `next_face` `next_quarter`，選擇下一個動作。每開始轉動一個面 (`quarter == 1`)，就要將 `turned` 設為當前狀態，再透過轉移表套用一次轉動。
- 5. 探索到新狀態時，產生子節點後，先推進父 frame 的 `next_face` 與 `next_quarter`，再把子節點 push 到 stack。父 frame 後續能在子節點返回後繼續探索下一個動作
- 6. 每次產生子節點時，把該 frame 的動作編碼存入 solution_path[top]。找到目標時，top 是解答長度，路徑中的前 top 個動作就是解答路徑
- 
-改進後，一樣進行 h1~h3 測試
-![image](https://hackmd.io/_uploads/HJ-TET0cGe.png)
-
-
-接下來，測試 solved state、distance - 1、distance - 11 狀態下的 transition table 呼叫次數。這次，我們將 ida_dfs 的呼叫次數改為 node 的 search 次數，結果如下:
-| state | shortest path length | Times of node search | transition pair calls |
-|:--:|:--:|:--:|:--:|
-|12345671111111|0|0|0|
-|25314672313211|1|4|3|
-|21345671111111|11|233966|233961|
-
-與原版遞迴版本的 `ida_dfs` 結果相同，但是現在的版本成功轉變成非遞迴，具被可直接轉譯成 RISCV 的條件
-
----
-
-## 4. Implementation on RV32I
-
-本段落將改進過的 c code ""
