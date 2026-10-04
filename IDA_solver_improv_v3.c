@@ -492,10 +492,10 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if(argc == 2 && strcmp(argv[1], "--minirubik_solver_output") == 0) {
+    if(argc == 2 && strcmp(argv[1], "--minirubik_table_output") == 0) {
 
         /* 輸出 pdb 和 transition table */
-        FILE *fp = fopen("Ripes code\\minirubik_solver.s", "w");
+        FILE *fp = fopen("Ripes code\\minirubik_table.s", "w");
 
         if (fp == NULL) {
             printf("cannot open table.s\n");

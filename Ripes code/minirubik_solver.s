@@ -2536,3 +2536,158 @@ o_transition_D:
       .byte 178, 2, 205, 2, 152, 2, 179, 2, 206, 2, 153, 2, 180, 2, 207, 2
       .byte 160, 2, 187, 2, 214, 2, 161, 2, 188, 2, 215, 2, 162, 2, 189, 2
       .byte 216, 2
+      
+# 定義相關常數
+.equ FRAME_SIZE, 12           # 一個 frame 有12 byte
+
+.equ FRAME_STATE_P, 0         # 各欄位的起始 byte
+.equ FRAME_STATE_O, 2
+.equ FRAME_TURNED_P, 4
+.equ FRAME_TURNED_O, 6
+.equ FRAME_LAST_FACE, 8
+.equ FRAME_NEXT_FACE, 9
+.equ FRAME_NEXT_QUARTER, 10
+.equ FRAME_ENTERED, 11
+
+.equ STACK_CAPACITY, 16       # stack 大小有 16 個 frame
+
+# 配置搜尋用的記憶體
+.align 2                      # 把下一個資料位置對齊到 4-byte (2^2) 邊界
+search_stack:
+    .word 0, 0, 0, 0, 0, 0    # 24 bytes
+    .word 0, 0, 0, 0, 0, 0    # 48 bytes
+    .word 0, 0, 0, 0, 0, 0    # 72 bytes
+    .word 0, 0, 0, 0, 0, 0    # 96 bytes
+    .word 0, 0, 0, 0, 0, 0    # 120 bytes
+    .word 0, 0, 0, 0, 0, 0    # 144 bytes
+    .word 0, 0, 0, 0, 0, 0    # 168 bytes
+    .word 0, 0, 0, 0, 0, 0    # 192 bytes
+
+solution_path:
+    .byte 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    
+    
+.text
+.globl main
+main:
+    
+    li   a0, 1
+    li   a1, 0
+    jal  ra, stack_initialization
+
+    la   t0, search_stack
+    lhu  t1, 0(t0)       # state.p_rank
+    lhu  t2, 2(t0)       # state.o_rank
+    lhu  t3, 4(t0)       # turned.p_rank
+    lhu  t4, 6(t0)       # turned.o_rank
+    lbu  t5, 8(t0)       # last_face
+    lbu  t6, 9(t0)       # next_face
+    lbu  a2, 10(t0)      # next_quarter
+    lbu  a3, 11(t0)      # entered
+
+    j    done
+
+# herustatic 查表
+# 輸入：
+#     a0 = p_rank
+#     a1 = o_rank
+#
+# 輸出：
+#     a0 = max(p_pdb[p_rank], o_pdb[o_rank])
+coord_heuristic:
+    la   t0, p_pdb
+    add  t0, t0, a0
+    lbu  t2, 0(t0)
+    
+    la   t0, o_pdb 
+    add  t0, t0, a1
+    lbu  t3, 0(t0)
+    
+    bgeu t2, t3, p_heruistic_larger
+    
+    
+    
+    mv   a0, t3  
+    ret
+
+p_heruistic_larger:
+    mv   a0, t2
+    ret
+    
+    
+# HTM Move，R 就查一次表 transition_table，R2 查兩次，R' 查三次
+# 輸入：
+#     a0 = p_rank
+#     a1 = o_rank
+#     a4 = face：0=R、1=B、2=D
+#     a5 = quarter-turn 次數：1、2、3
+# 
+# 輸出：
+#     a0 = 轉動後 p_rank
+#     a1 = 轉動後 o_rank
+HTM_Move:
+    
+      # 查看 face 是哪個
+      li   t1, 0    
+      beq  t1, a4, R_face
+   
+      li   t1, 1
+      beq  t1, a4, B_face
+      
+      li   t1, 2
+      beq  t1, a4, D_face
+      
+      ret 
+R_face:
+      la   a2, p_transition_R  # a2 : p_transition table
+      la   a3, o_transition_R  # a3 : o_transition table
+      mv   a6, a5              # a6 = 剩餘的 quarter-turn 次數
+      
+      j    HTM_loop
+B_face:
+      la   a2, p_transition_B
+      la   a3, o_transition_B
+      mv   a6, a5         
+      
+      j    HTM_loop
+D_face:
+      la   a2, p_transition_D
+      la   a3, o_transition_D
+      mv   a6, a5         
+HTM_loop:
+      slli t0, a0, 1            # p_rank * 2
+      add  t0, t0, a2           # t0 轉變成 p_transition 實際起始位置
+      slli t1, a1, 1            # o_rank * 2
+      add  t1, t1, a3           # t1 轉變成 o_transition 實際起始位置
+      lhu  a0, 0(t0)            # p_transition 實際起始位置往後讀 2 byte
+      lhu  a1, 0(t1)            # o_transition 實際起始位置往後讀 2 byte
+      addi a6, a6, -1           # 扣一次 loop 次數
+      bne  a6, x0, HTM_loop
+    
+    ret
+    
+# 初始化 stack 第一個 element - 初始狀態
+# sh (store half)
+stack_initialization:
+      la   t0, search_stack
+        
+      sh   a0, 0(t0)      # 把 a0 的低 16 bits 寫到 t0 + FRAME_STATE_P 的位置
+      sh   a1, 2(t0)
+      sh   a0, 4(t0)     
+      sh   a1, 6(t0)
+
+      li   t1, 3                      # 用不屬於有效面編號的 3，否則第一步選 D 時會被誤認為同面連轉
+      sb   t1, 8(t0)
+      sb   zero, 9(t0)
+      li   t1, 1                      # 從 quarter 1 開始；設成 0 會產生無效的轉動次數
+      sb   t1, 10(t0)
+      sb   zero, 11(t0)
+
+      li   s0, 0                  # top = 0，指向 root frame
+    
+    ret
+
+done:
+    li   a7, 10
+    ecall
+      
