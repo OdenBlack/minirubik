@@ -11,7 +11,7 @@ enum {
     O_STATES = 729,     /* 3^6 */
     P_STATES = 5040,    /* 7! */
     MAX_DEPTH = 11,     /* 二階魔術方塊在HTM下的最大可能最佳步數 */
-    MAX_STACK_SIZE = 16 /* 為了計算方便，這邊用 2 的冪次大小來建立 stack 大小*/
+    MAX_STACK_SIZE = 16,/* 為了計算方便，這邊用 2 的冪次大小來建立 stack 大小*/
     MOVES = 9           /* 一次總共九種轉動方式 */
 };
 
@@ -61,7 +61,7 @@ static const uint8_t twist[3][C] = {
 /* 額外建立 transition table*/
 static uint16_t p_transition[3][P_STATES];
 static uint16_t o_transition[3][O_STATES];
-static int transitions_ready;
+static int transitions_ready = 0;
 static uint64_t transition_pair_calls = 0;
 
 /* 新的節點探索次數 */
@@ -291,7 +291,7 @@ static int parse_state(const char *text, state_t *state) {
         o_sum += o;
     }
 
-    /* 物理守恆檢查：活動角塊朝向總和模 3 必須合法 */
+    /* 物理守恆檢查：活動角塊朝向總和 mod 3 必須合法 */
     if (o_sum % 3 != 0)
         return 0;
 
@@ -310,7 +310,7 @@ static inline int is_solved(const state_t *s) {
 /* 新的ida search ，沒有用到遞迴 */
 static int ida_search_iterative(coord_t root, uint8_t bound, int *next_bound)
 {
-    frame_t stack[MAX_STACK_SIZE + 1];
+    frame_t stack[MAX_STACK_SIZE];
     int top = 0;
     
 
@@ -382,9 +382,8 @@ static int ida_search_iterative(coord_t root, uint8_t bound, int *next_bound)
         // 記錄路徑並保存父 frame 進度
         // top 是父狀態的深度，所以這個 move 存在路徑的 solution_path[top]。把目前候選座標複製成 child
         // 這邊 face 的乘 3 修改乘左移1 bit 然後再加一次
-        face<<1;
-        face += face;
-        solution_path[top] = (uint8_t)(face + quarter - 1U);
+        uint8_t move_base = (uint8_t)((face << 1) + face);
+        solution_path[top] = (uint8_t)(move_base + quarter - 1U);
         coord_t child = cur->turned;
 
 
@@ -490,6 +489,108 @@ int main(int argc, char **argv)
         }
 
         puts("Self test passed.");
+        return 0;
+    }
+
+    if(argc == 2 && strcmp(argv[1], "--minirubik_solver_output") == 0) {
+
+        /* 輸出 pdb 和 transition table */
+        FILE *fp = fopen("Ripes code\\minirubik_solver.s", "w");
+
+        if (fp == NULL) {
+            printf("cannot open table.s\n");
+            return 1;
+        }
+        init_o_pdb();
+        init_p_pdb();
+        init_transition_tables();
+        if(!transitions_ready){
+            fprintf(stderr, "transition table initialization failed\n");
+            return -1;
+        } 
+
+
+        fprintf(fp, ".data\n\n");
+        
+        // p_pdb 共 5040 個 byte
+
+        fprintf(fp, "p_pdb: # total 5040 bytes \n");
+        for(int i = 0; i<P_STATES; ++i){
+            if(i % 16 == 0)  fprintf(fp, "      .byte ");
+            fprintf(fp, "%u", (unsigned)p_pdb[i]);
+            if(i % 16 == 15 || i + 1 == P_STATES) fprintf(fp, "\n");    // 每 16 個換行
+            else fprintf(fp, ", ");
+        }
+
+        // o_pdb 共 729 個 byte
+        fprintf(fp, "o_pdb: # total 729  bytes \n");
+        for(int i = 0; i<O_STATES; ++i){
+            if(i % 16 == 0)  fprintf(fp, "      .byte ");
+            fprintf(fp, "%u", (unsigned)o_pdb[i]);
+            if(i % 16 == 15 || i + 1 == O_STATES) fprintf(fp, "\n");    // 每 16 個換行
+            else fprintf(fp, ", ");
+        }
+        fprintf(fp, "       .byte 0    # padding: 讓下一張表從偶數位址開始\n"); // # padding: 讓下一張表從偶數位址開始
+
+        // p_transition, 每個 face 都有 5040 個
+        for(int j= 0; j<3; ++j){
+            uint8_t low_byte, high_byte;
+            switch(j){
+                case 0:
+                    fprintf(fp, "p_transition_R: # 原本一個 element 16 bits, 需要拆成兩個 byte \n");
+                    break;
+                case 1:
+                    fprintf(fp, "p_transition_B: \n");
+                    break;
+                case 2:
+                    fprintf(fp, "p_transition_D: \n");
+                    break;
+            }
+            for(int i = 0; i<P_STATES; ++i){
+                if(i % 8 == 0)  fprintf(fp, "      .byte ");
+
+                // 低位元組在前、高位元組在後
+                low_byte = (unsigned)p_transition[j][i] & 0xffU;
+                high_byte = (unsigned)p_transition[j][i]>> 8 & 0xffU;
+
+                fprintf(fp, "%u, %u", (unsigned)low_byte, (unsigned)high_byte);
+
+                if(i % 8 == 7 || i + 1 == P_STATES) fprintf(fp, "\n");    // 每 16 個換行
+                else fprintf(fp, ", ");
+            } 
+        }
+
+        // o_transition, 每個 face 都有 729 個
+        for(int j= 0; j<3; ++j){
+            uint8_t low_byte, high_byte;
+            switch(j){
+                case 0:
+                    fprintf(fp, "o_transition_R: # 原本一個 element 16 bits, 需要拆成兩個 byte \n");
+                    break;
+                case 1:
+                    fprintf(fp, "o_transition_B: \n");
+                    break;
+                case 2:
+                    fprintf(fp, "o_transition_D: \n");
+                    break;
+            }
+            for(int i = 0; i<O_STATES; ++i){
+                if(i % 8 == 0)  fprintf(fp, "      .byte ");
+
+                // 低位元組在前、高位元組在後
+                low_byte = (unsigned)o_transition[j][i] & 0xffU;
+                high_byte = (unsigned)o_transition[j][i]>> 8 & 0xffU;
+
+                fprintf(fp, "%u, %u", (unsigned)low_byte, (unsigned)high_byte);
+
+                if(i % 8 == 7 || i + 1 == O_STATES) fprintf(fp, "\n");    // 每 16 個換行
+                else fprintf(fp, ", ");
+            } 
+        }
+        if (fclose(fp) != 0) {
+            fprintf(stderr, "could not close table.s\n");
+            return 1;
+        }
         return 0;
     }
 
