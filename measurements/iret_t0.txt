@@ -1,0 +1,7 @@
+===== wall-clock model execution time (ms)
+0
+===== simulation information (processor configuration, input file, ...)
+ISA extensions: 
+processor: RV32_ISS
+source file: C:\Learning\programing_project\C\computer_architecture\HW1\minirubik\measurements\store_probe.s
+
