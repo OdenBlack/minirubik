@@ -3,3 +3,6 @@
 *.swp
 solver
 mini
+
+# Generated Ripes batch logs and scratch files.
+/test_results/

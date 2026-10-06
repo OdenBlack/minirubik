@@ -224,3 +224,10 @@ empty line.
 
 See [`report.md`](report.md) for the model, algorithm, diagrams, and Frama-C
 validation notes.
+
+## RV32I T5 batch validation
+
+The PowerShell entry point `tests/run_t5_distance11.ps1` runs the RV32I solver
+against all 2,644 distance-11 states, independently replays its printed moves,
+and records retired instructions. See [the batch test instructions](tests/README_T5.md)
+for setup, resuming a run, and interpreting the results.

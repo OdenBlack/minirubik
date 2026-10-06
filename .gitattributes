@@ -1,0 +1,2 @@
+# Keep the runner bytes stable for SHA-256 checks when resuming an existing run.
+tests/t5_distance11_runner.ps1 -text
