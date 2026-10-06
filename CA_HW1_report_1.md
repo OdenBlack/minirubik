@@ -537,6 +537,8 @@ typedef struct {
 
 上述的 `p_pdb`、`o_pdb`、`p_transition`、`o_transition`，所占記憶體分別為 5040 bytes、729 bytes、30240 bytes、4374 bytes，總和(加上 o_pdb 的 1 bytes padding)為 40384 bytes 
 
+---
+
 ### 4.2 Memory of .data in minirubik_solver.s
 
 .data 中含有以下主要的資料結構與 table，對應的占用記憶體如下表
@@ -551,6 +553,7 @@ typedef struct {
 | solution_path | 11 |
 | state_p 、 state_o | 14 |
 
+---
 
 ### 4.3 Workflow in minirubik_solver.s
 
@@ -567,7 +570,7 @@ typedef struct {
 下表為各 Register 主要用途，在不同 function 區塊的可能會有其他的使用目的，但是大致遵從以下表格。跨函式呼叫仍需保留的搜尋資訊放在 s 暫存器；每個節點自己的資訊放在 frame；t 和 a 暫存器只作短暫運算。 呼叫 helper 後，需要的 frame 位址就從 s3 和 s0 重新計算，不依賴可能已被改寫的 t0。
 
 | 暫存器 | 固定用途 |
-|---|---|
+|:--:|:--:|
 | `s0` | stack top，也就是目前搜尋深度 `g` |
 | `s1` | 本輪 IDA* 的 `bound` |
 | `s2` | 下一輪的 `next_bound` |
@@ -579,6 +582,7 @@ typedef struct {
 | `a5` | quarter-turn 次數：`1`、`2`、`3` |
 | `a6` | `HTM_Move` 內部剩餘轉動次數 |
 
+---
 
 ### 4.4 Input encoding and validity checks
 
@@ -589,12 +593,16 @@ typedef struct {
     * 用 `seen` 作為 bitmask 使用 shift、andi、or 檢查重複。
 朝向總和透過反覆減 3 檢查，取代 mod 3 運算
 
+---
+
 ### 4.5 Rank Calculation and Arithmetic Rewriting
 * 在 `rank_permutation` 中，設定初值後會進到外層迴圈的 `rank_permutation_loop` 中，並透過呼叫 `p_state_smaller` 進到內層迴圈中計算 `smaller`，回傳後計算 p = p * (C - i) + smaller。
 
 * 由於 RV32I 中並沒有乘法運算，因此我們實現 p = p * (C - i) + smaller 的方法大致如下: 首先設定一個乘法次數計數器 multiplier，然後進入 `rank_permutation_multiply` 進行重複加法，直到 multiplier 達到目標累加次數，加上 smaller 後離開內層迴圈。
 
 * 在 `rank_orientation` 中，設定初值後進入迴圈計算 rank = rank * 3 + state->o[i]，與 `rank_permutation` 類似，這邊一樣使用 `rank_orientation_loop` 進行重複加法來實現乘法
+
+---
 
 ### 4.6  ida_visit in RV32I
 
@@ -608,4 +616,29 @@ typedef struct {
     
 * `expand_todo`的動作包含選擇 HTM move、查轉移表、寫入路徑並 push 子節點等，而如果超過門檻 next_bound 時，會進行 `cutoff` 進行剪枝，並視情況更新門檻值，最後 pop 目前節點後回到父 frame。
 
+---
+
 ### 4.7  Validation and Performance Records
+接下來，我們將執行 T5、T6、T7 測試，以確認 minirubik_solver.s 中的 RV32I code 所計算出的最短路徑是否能夠返回 solved state、是否能正確輸出最短路徑長度、`--iret` 所獲得的 retired instruction 是否皆在 $5 \times 10^7$ 內。
+
+
+* T5 : 在 Ripes 中，驗證每個受測輸入的回傳路徑確實還原方塊。為了同時能檢驗所有 distance-11 case 皆能在 $5 \times 10^7$ 個 retired instruction 中完成，我們透過一組額外的程式 "export_distance11.c" ，從原始 solver.c 的完整 BFS table 取得了 distance-11 的 2644 個 case，作為我們進行 T5 測試的測資
+    * 關於測試腳本的使用，請參考 .\tests\README_T5 的說明
+    * 測試腳本中，每組測試除了確認 guest 回報 T5 PASS、s8=1，以及輸出動作數與 s6 記錄的解長度一致外，host 測試腳本也會使用獨立的角塊位置與朝向規則，重新套用輸出的動作序列，確認最後回到已解狀態。
+    * 根據測試結果，雖然所有 distance-11 case 皆通過 T5 測試，但是部分 distance-11 case 的 retired instructions 超過 $5\times10^7$，因此目前版本未完全達成作業要求的指令數上限。我們保留現有實作，並呈現完整測量結果。
+    * 超過 retired instructions 上限的 case 如下表，共計十筆測資未符合，指令數限制符合率為 99.62%
+    
+    |input|iret|
+    |:--:|:--:|
+    |12745631111111|64637567|
+    |14325671111111|75050065|
+    |21354672313211|72442473|
+    |25714632313211|63923670|
+    |41625372313211|61629524|
+    |41752632313211|73214958|
+    |45312672313211|62763381|
+    |47265312313211|61548327|
+    |52341671111111|64185337|
+    |54721631111111|76349062|
+    
+    * 超過 retired instructions 上限的 case 中，最大值為 "54721631111111" 的組合，retired instructions 為 76349062，約為上限的 1.53 倍
