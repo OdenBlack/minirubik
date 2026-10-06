@@ -411,7 +411,7 @@ static int ida_dfs(state_t s, int g, int bound, int last_f, int *next_bound) {
 
 ### 3.3 IDA_solver_improv.c - A imporvement version for IDA_solver.c
 
-在 IDA_solver.c 中，存在著一些不適合於 Ripes (guest) 上運行的指令，如: mod 3 運算、recursive 運算等。在本段落中，我們嘗試針對幾種方向進行優化，以便在 Stage 4 中能夠編譯成 RISCV 的版本。我們優化的方向將包含: 引入轉移表並簡化狀態 rank 運算、改為非遞迴搜尋、簡化 orientation 運算。
+在 IDA_solver.c 中，存在著一些不適合於 RV32_ISS 上運行的指令，如: mod 3 運算、recursive 運算等。在本段落中，我們嘗試針對幾種方向進行優化，以便在 Stage 4 中能夠編譯成 RISCV 的版本。我們優化的方向將包含: 引入轉移表並簡化狀態 rank 運算、改為非遞迴搜尋。簡化乘法/除法/mod運算的部分我們將留到 Stage 4 進行
 
 ---
 
@@ -483,7 +483,7 @@ static void init_transition_tables(void)
 可以從 transition pair calls 與原本的 ida_dfs calls 數量相同的結果，來確認搜尋樹的結構未改變，但是因為改用查詢 transition table 的方式，H3 的速度大幅上升，側面驗證目前的 IDA_solver_improv.c 在執行的時間有了顯著的加快
 
 ---
-* 改為非遞迴搜尋: Ripes 無法進行遞迴，因此我們將修正原本 ida_dfs 中透過呼叫遞迴來探索 searching tree 的作法，透過呼叫一個 stack 來保存每一次動作的紀錄與探索狀況
+* 改為非遞迴搜尋: RV32_ISS 無法進行遞迴，因此我們將修正原本 ida_dfs 中透過呼叫遞迴來探索 searching tree 的作法，透過呼叫一個 stack 來保存每一次動作的紀錄與探索狀況
 
 首先，我們將每個魔術方塊的執行動作都以一個 frame 為單位，結構如下
 ```clike=
@@ -517,3 +517,61 @@ typedef struct {
 |21345671111111|11|233966|233961|
 
 與原版遞迴版本的 `ida_dfs` 結果相同，但是現在的版本成功轉變成非遞迴，具被可直接轉譯成 RISCV 的條件
+
+---
+
+## 4. Implementation on RV32I
+
+本段落將實作 c code 的 RV32I 轉譯，首先會將`p_pdb`、`o_pdb`、`p_transition`、`o_transition` 作為靜態資料輸出。然後將搜尋的部分轉譯成 RV32I
+
+### 4.1 Output of pdb & transition table
+額外在 IDA_solver_improv.c 的 main 中新增了能輸出 `p_pdb`、`o_pdb`、`p_transition`、`o_transition` 的指令，使用 `--output_table` 進行，將會輸出含有 .data 部分的 .s 檔，以供接下來的 RV32I 轉譯作使用
+
+上述的 `p_pdb`、`o_pdb`、`p_transition`、`o_transition`，所占記憶體分別為 5040 bytes、729 bytes、30240 bytes、4374 bytes，總和(加上 o_pdb 的 1 bytes padding)為 40384 bytes 
+
+### 4.2 Workflow in minirubik_solver.s
+
+我們將 IDA_solver_improv.c 轉譯成 RV32I，其成果置於.\Ripes code\minirubik_solver.s 裡。整體流程可以大致分為如下
+1. 由 IDA_solver_improv.c 透過 `.\IDA_solver_improv_v3.exe --minirubik_table_output` 在 .\Ripes code 資料夾中輸出含有上述四種 table 的 minirubik_table.s
+2. minirubik_solver.s 紀錄 minirubik_table.s 中的 table 資訊於 .data 區域，隨後配置所需陣列:  `search_stack` `solution_path` `input_state` `state_p` `state_o`
+3. 在 main 中透過呼叫 function `string_to_state_p` `string_to_state_o`  來將 `input_state` 的 state 資訊儲存在 `state_p` `state_o` 中，並呼叫  `parse_state` 檢驗合法性
+4. 透過呼叫 `rank_permutation` `rank_orientation` 來將 state 編碼成 p_rank 以及 o_rank
+5. 呼叫 `stack_initialization` 進行 stack 初始化
+6. 呼叫 `coord_heuristic` 計算 heuristic
+7. 呼叫 `ida_visit` 進行迭代搜尋，直到找到正確路徑
+8. 驗證正確性並輸出路徑
+
+下表為各 Register 主要用途，在不同 function 區塊的可能會有其他的使用目的，但是大致遵從以下表格。跨函式呼叫仍需保留的搜尋資訊放在 s 暫存器；每個節點自己的資訊放在 frame；t 和 a 暫存器只作短暫運算。 呼叫 helper 後，需要的 frame 位址就從 s3 和 s0 重新計算，不依賴可能已被改寫的 t0。
+
+| 暫存器 | 固定用途 |
+|---|---|
+| `s0` | stack top，也就是目前搜尋深度 `g` |
+| `s1` | 本輪 IDA* 的 `bound` |
+| `s2` | 下一輪的 `next_bound` |
+| `s3` | `search_stack` 起始位址 |
+| `t0`–`t6` | 暫存計算；呼叫 helper 後視為可能已被改寫 |
+| `a0`、`a1` | helper 輸入／輸出；heuristic 用它們傳入兩個 rank |
+| `a2`、`a3` | `HTM_Move` 使用的轉移表基底位址 |
+| `a4` | face：`0=R, 1=B, 2=D` |
+| `a5` | quarter-turn 次數：`1`、`2`、`3` |
+| `a6` | `HTM_Move` 內部剩餘轉動次數 |
+
+
+### 4.3 Input encoding and validity checks
+
+* 在 `input_state` ，固定前七位為角塊的 permutation，後七位為角塊的 orientation。因此首先需要檢查 state 資訊解析後，長度總和是不是 14，若不是14，將會觸發錯誤
+* 確認正確後，將會進入 `parse_state_loop`。首先字元減去 ASCII '1'，轉為內部的 0..6、0..2，然後檢查幾種條件: 角塊編號不可超出 1~7、角塊朝向不可超出 1~3、角塊不可重複出現、朝向總和是否為 3 的倍數，其中一項不符合將會直接出現 error。
+* 確認無誤後計算 o_sum += o，並重複 `parse_state_loop` 循環，直到所有 state 檢查完畢後進入 `parse_state_o_sum_check` 檢查朝向總和
+* 值得注意的是，這邊檢查朝向總和時，我們透過以下方法改寫了 c code 中 `if (o_sum % 3 != 0)` 需要取 mod 的運算。
+    * 用 `seen` 作為 bitmask 使用 shift、andi、or 檢查重複。
+朝向總和透過反覆減 3 檢查，取代 mod 3 運算
+
+### 4.4 Rank Calculation and Arithmetic Rewriting
+在 `rank_permutation` 中，設定初值後會進到外層迴圈的 `rank_permutation_loop` 中，並透過呼叫 `p_state_smaller` 進到內層迴圈中計算 `smaller`，回傳後計算 p = p * (C - i) + smaller。
+
+由於 RV32I 中並沒有乘法運算，因此我們實現 p = p * (C - i) + smaller 的方法大致如下: 首先設定一個乘法次數計數器 multiplier，然後進入 `rank_permutation_multiply` 進行重複加法，直到 multiplier 達到目標累加次數，加上 smaller 後離開內層迴圈。
+
+在 `rank_orientation` 中，設定初值後進入迴圈計算 rank = rank * 3 + state->o[i]，與 `rank_permutation` 類似，這邊一樣使用 `rank_orientation_loop` 進行重複加法來實現乘法
+
+### 4.5  ida_visit in RV32I
+
