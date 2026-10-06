@@ -1,4 +1,12 @@
+---
+title: Computer Architecture HW1
+
+---
+
 # Computer Architecture HW1
+
+[![hackmd-github-sync-badge](https://hackmd.io/c43Q04SMTwqe-6_phvXkZw/badge)](https://hackmd.io/c43Q04SMTwqe-6_phvXkZw)
+
 [toc]
 
 ## 0. Version and enviornment
@@ -529,7 +537,22 @@ typedef struct {
 
 上述的 `p_pdb`、`o_pdb`、`p_transition`、`o_transition`，所占記憶體分別為 5040 bytes、729 bytes、30240 bytes、4374 bytes，總和(加上 o_pdb 的 1 bytes padding)為 40384 bytes 
 
-### 4.2 Workflow in minirubik_solver.s
+### 4.2 Memory of .data in minirubik_solver.s
+
+.data 中含有以下主要的資料結構與 table，對應的占用記憶體如下表
+
+| 項目 | Bytes |
+|---|---:|
+| permutation PDB | 5,040 |
+| orientation PDB | 729 |
+| permutation transitions | 30,240 |
+| orientation transitions | 4,374 |
+| search_stack：16 × 12 | 192 |
+| solution_path | 11 |
+| state_p 、 state_o | 14 |
+
+
+### 4.3 Workflow in minirubik_solver.s
 
 我們將 IDA_solver_improv.c 轉譯成 RV32I，其成果置於.\Ripes code\minirubik_solver.s 裡。整體流程可以大致分為如下
 1. 由 IDA_solver_improv.c 透過 `.\IDA_solver_improv_v3.exe --minirubik_table_output` 在 .\Ripes code 資料夾中輸出含有上述四種 table 的 minirubik_table.s
@@ -557,7 +580,7 @@ typedef struct {
 | `a6` | `HTM_Move` 內部剩餘轉動次數 |
 
 
-### 4.3 Input encoding and validity checks
+### 4.4 Input encoding and validity checks
 
 * 在 `input_state` ，固定前七位為角塊的 permutation，後七位為角塊的 orientation。因此首先需要檢查 state 資訊解析後，長度總和是不是 14，若不是14，將會觸發錯誤
 * 確認正確後，將會進入 `parse_state_loop`。首先字元減去 ASCII '1'，轉為內部的 0..6、0..2，然後檢查幾種條件: 角塊編號不可超出 1~7、角塊朝向不可超出 1~3、角塊不可重複出現、朝向總和是否為 3 的倍數，其中一項不符合將會直接出現 error。
@@ -566,12 +589,23 @@ typedef struct {
     * 用 `seen` 作為 bitmask 使用 shift、andi、or 檢查重複。
 朝向總和透過反覆減 3 檢查，取代 mod 3 運算
 
-### 4.4 Rank Calculation and Arithmetic Rewriting
-在 `rank_permutation` 中，設定初值後會進到外層迴圈的 `rank_permutation_loop` 中，並透過呼叫 `p_state_smaller` 進到內層迴圈中計算 `smaller`，回傳後計算 p = p * (C - i) + smaller。
+### 4.5 Rank Calculation and Arithmetic Rewriting
+* 在 `rank_permutation` 中，設定初值後會進到外層迴圈的 `rank_permutation_loop` 中，並透過呼叫 `p_state_smaller` 進到內層迴圈中計算 `smaller`，回傳後計算 p = p * (C - i) + smaller。
 
-由於 RV32I 中並沒有乘法運算，因此我們實現 p = p * (C - i) + smaller 的方法大致如下: 首先設定一個乘法次數計數器 multiplier，然後進入 `rank_permutation_multiply` 進行重複加法，直到 multiplier 達到目標累加次數，加上 smaller 後離開內層迴圈。
+* 由於 RV32I 中並沒有乘法運算，因此我們實現 p = p * (C - i) + smaller 的方法大致如下: 首先設定一個乘法次數計數器 multiplier，然後進入 `rank_permutation_multiply` 進行重複加法，直到 multiplier 達到目標累加次數，加上 smaller 後離開內層迴圈。
 
-在 `rank_orientation` 中，設定初值後進入迴圈計算 rank = rank * 3 + state->o[i]，與 `rank_permutation` 類似，這邊一樣使用 `rank_orientation_loop` 進行重複加法來實現乘法
+* 在 `rank_orientation` 中，設定初值後進入迴圈計算 rank = rank * 3 + state->o[i]，與 `rank_permutation` 類似，這邊一樣使用 `rank_orientation_loop` 進行重複加法來實現乘法
 
-### 4.5  ida_visit in RV32I
+### 4.6  ida_visit in RV32I
 
+* 由於每個 frame 佔 12 bytes，因此首先計算 frame address = s3 + top * 12，透過對 top 左移三 bits 和 2 bits 並相加來實現 top*12。
+* 檢查是否已完成首次進入的處理，若是首次進入該 frame，則需要進行以下動作
+    * 計算 h(state)
+    * 重新計算因呼叫 `coord_heuristic` 而導致 base address 被覆寫的t0
+    * 計算 f = g + h 以用來判斷是否剪枝
+    * 確認是否轉回了 solved state
+    * 最後進到 `expand_todo` 進行 IDA* DFS 的例行事項
+    
+* `expand_todo`的動作包含選擇 HTM move、查轉移表、寫入路徑並 push 子節點等，而如果超過門檻 next_bound 時，會進行 `cutoff` 進行剪枝，並視情況更新門檻值，最後 pop 目前節點後回到父 frame。
+
+### 4.7  Validation and Performance Records
