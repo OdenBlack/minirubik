@@ -322,7 +322,7 @@ static int ida_search_iterative(coord_t root, uint8_t bound, int *next_bound)
     stack[0].next_quarter = 1;
     stack[0].entered = false;
 
-    // 只要 stack 內還有東西 就一直做 ida 的 loop
+    // 一直做 ida 的 loop
     while(top>=0){
         frame_t *cur = &stack[top]; // 目前的 frame 
         

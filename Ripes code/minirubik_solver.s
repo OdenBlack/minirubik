@@ -2537,7 +2537,7 @@ o_transition_D:
       .byte 160, 2, 187, 2, 214, 2, 161, 2, 188, 2, 215, 2, 162, 2, 189, 2
       .byte 216, 2
       
-# 定義相關常數
+# 相關常數
 .equ FRAME_SIZE, 12           # 一個 frame 有12 byte
 
 .equ FRAME_STATE_P, 0         # 各欄位的起始 byte
@@ -2567,125 +2567,503 @@ solution_path:
     .byte 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
     
     
+# 這個測資對應 p_rank=9、o_rank=16，解答是 B'
+input_state:
+    .string "12356741112323"
+
+# 解析後的七個角塊編號與朝向
+state_p:
+    .byte 0, 0, 0, 0, 0, 0, 0
+state_o:
+    .byte 0, 0, 0, 0, 0, 0, 0
+    
+    
 .text
 .globl main
 main:
+
+# Register 設定
+#    s0:  stack top，也就是目前搜尋深度 g
+#    s1:  本輪 IDA* 的 bound
+#    s2:  下一輪的 next_bound
+#    s3:  search_stack 起始位址 
+#    t0 – t6: 暫存計算；呼叫 helper 後視為可能已被改寫
+#    a0, a1: helper 輸入／輸出；heuristic 用它們傳入兩個 rank 
+#    | `a2`、`a3` | `HTM_Move` 使用的轉移表基底位址 |
+#    | `a4` | face：`0=R, 1=B, 2=D` |
+#    | `a5` | quarter-turn 次數：`1`、`2`、`3` |
+#    | `a6` | `HTM_Move` 內部剩餘轉動次數 |
+    li   s0, 0                  # 先將 s0 作為 string 的位置計數器
+    jal  ra, string_to_state_p
+    jal  ra, string_to_state_o
+    jal  ra, parse_state
+    li   s0, 0                  # 重設 s0 計數器
+    li   a0, 0                  # 初始化 p_rank
+    li   a1, 0                  # 初始化 o_rank
+    jal  ra, rank_permutation
+    jal  ra, rank_orientation
     
-    li   a0, 1
-    li   a1, 0
+    
+    la   s3, search_stack
     jal  ra, stack_initialization
+    li   s0, 0                  # s0 轉為 root 的深度 g = 0
 
-    la   t0, search_stack
-    lhu  t1, 0(t0)       # state.p_rank
-    lhu  t2, 2(t0)       # state.o_rank
-    lhu  t3, 4(t0)       # turned.p_rank
-    lhu  t4, 6(t0)       # turned.o_rank
-    lbu  t5, 8(t0)       # last_face
-    lbu  t6, 9(t0)       # next_face
-    lbu  a2, 10(t0)      # next_quarter
-    lbu  a3, 11(t0)      # entered
+    #  第一輪 bound = h(root)
+    mv   t0, s3
+    lhu  a0, 0(t0)              # root state.p_rank
+    lhu  a1, 2(t0)              # root state.o_rank
+    jal  ra, coord_heuristic
+    mv   s1, a0                  # bound = h(root)
+    li   s2, 255                # next_bound 初始為大值
 
-    j    done
+
+    j    ida_visit
+    
+    
+string_to_state_p:
+    
+    la   t0, input_state
+    add  t0, t0, s0        # 加到 input_state 目前第 s0 個數字
+    la   t1, state_p
+    add  t1, t1, s0        # 加到 state_p 目前第 s0 個數字
+    lbu  t2, 0(t0)         # 讀出 input_state 第一個數字的 ASCII
+    addi t2, t2, -49       # 取得字元代表的數字, 49 為 1 的 ASCII
+    sb   t2, 0(t1)         # 寫入 state_p 的第 s0 個element
+    
+    addi s0, s0 ,1
+    li   t0, 6
+    bleu s0, t0, string_to_state_p
+    ret
+    
+string_to_state_o:    
+
+    la   t0, input_state
+    add  t0, t0, s0        # 加到目前第 s0 個數字
+    la   t1, state_o
+    add  t1, t1, s0        # 加到 state_o 目前第 s0 個數字
+    addi t1, t1, -6        # 因為此時 s0 已經從 6 開始，需要先扣掉
+    lbu  t2, 0(t0)         # 讀出 input_state 第一個數字的 ASCII
+    addi t2, t2, -49       # 取得字元代表的數字, 49 為 1 的 ASCII
+    sb   t2, 0(t1)         # 寫入 state_p 的第 s0 - 6 個element
+    
+    addi s0, s0 ,1
+    li   t0, 13
+    bleu s0, t0, string_to_state_o
+    ret
+
+parse_state:
+    # 如果 s0  不等於 13 代表 state 解析一定有問題
+    
+    ret
+    
+rank_permutation:
+    
+    #    a0 = p
+    #    s0 = 迴圈計數器 = for (uint8_t i = 0; i < C; ++i) 的 i
+    li   t0, 0                 # uint8_t smaller = 0;
+    lb   t1, 0(s0)             # uint8_t j = (uint8_t) (i + 1U); j < C; ++j 的 j
+    addi t1, t1, 1
+    jal  ra, p_state_smaller   # 會回傳 t0
+    
+    # p = p * (C - i) + smaller = p * C - p * i + smaller;
+    lhu  t2, 0(t0)             # t2 = p
+    slli a0, a0, 3             # a0 * 8
+    sub  a0, a0, t2            # a0 = p * 8 - p = p * 7
+    
+    
+    addi s0, s0 ,1
+    li   t0, 13
+    bleu s0, t0, rank_permutation
+    ret
+
+p_state_smaller:
+    
+    
+    ret
+
+p_state_times_i:
+    
+    ret
+
+rank_orientation:
+    
+    ret
+
+ida_visit: 
+    # 進行 ida visit
+    # frame address = s3 + top*12, 先算 top*12
+    slli t0, s0, 3
+    slli t1, s0, 2
+    add  t0, t0, t1
+    add  t0, s3, t0  # t0 = frame address
+    
+    # 確認是否已經 entered 過
+    lbu  t1, 11(t0)  # entered 是 byte
+    bne  t1, zero, expand_todo  # 已進入過的 frame，之後處理子節點
+    
+    # 首次進入：計算 h(state)
+    lhu  a0, 0(t0)
+    lhu  a1, 2(t0)
+    jal  ra, coord_heuristic
+    # 因呼叫 coord_heuristic ,需要重新計算 t0
+    slli t0, s0, 3
+    slli t1, s0, 2
+    add  t0, t0, t1
+    add  t0, s3, t0  # t0 = frame address
+    
+    # f = g + h
+    add  t3, s0, a0
+    # 如果 f > bound，更新 next_bound 並 pop
+    bltu  s1, t3, cutoff
+    
+    # 如果轉回了 solved state 就直接回傳
+    lhu  t1, 0(t0)
+    lhu  t2, 2(t0)
+    or   t1, t1, t2
+    beq  t1, zero, solved
+    
+    # 標記成已首次檢查
+    li   t1, 1
+    sb   t1, 11(t0)
+    
+# -------------------------------------------------    
+    
+expand_todo:
+    # 下一步會在這裡加入 move 選擇、產生 child frame 與 push。
+    # 此時的t0 = frame address
+    
+    # 已達最大搜尋深度, 不能再 push 子節點
+    li    t1, 11
+    bgeu   s0, t1, expand_pop
+    
+    # 取出目前要嘗試的 face 和 quarter
+    lbu  t1, 9(t0) # cur->next_face;
+    li   t2, 3 
+    bgeu  t1, t2, expand_pop # 這層的面都試完了，回到父 frame
+    
+    # 確認 next_quarter 是否落在合法範圍 1 到 3
+    lbu  t2, 10(t0)                     # 讀 next_quarter
+    beq  t2, zero, expand_fix_quarter   # 若值是 0，跳到 expand_fix_quarter，把它修正成 1
+    li   t3, 3                          # 若 3 < next_quarter，就跳到 expand_advance_face
+    bltu t3, t2, expand_advance_face
+    
+    # 若上一個 frame 轉動的面與現在相同，則直接跳過
+    lbu   t3, 8(t0)
+    beq  t1, t3, expand_skip_same_face
+    
+    # 新增兩個暫存器用途：
+    # s4：目前嘗試的 face
+    # s5：目前嘗試的 quarter-turn 次數
+    mv   s4, t1
+    mv   s5, t2
+    
+    # 先更新父 frame 的游標，再產生目前選定的 move
+    # s4、s5 已保存目前的 face、quarter
+    li   t3, 3
+    beq  s5, t3, expand_selected_quarter3
+
+    # q=1、2：下次探索同一面的下一種轉法
+    addi t3, s5, 1
+    sb   t3, 10(t0)
+    j    expand_cursor_updated
+
+expand_selected_quarter3:
+    # q=3：下次探索下一面
+    addi t1, t1, 1
+    sb   t1, 9(t0)
+    li   t2, 1
+    sb   t2, 10(t0)
+
+    # 繼續產生目前的第三種轉法
+    j    expand_cursor_updated
+    
+
+expand_fix_quarter: # 修正 next_quarter 為 0 的錯誤
+    li   t2, 1
+    sb   t2, 10(t0)
+    j    expand_todo
+    
+expand_advance_face:
+    # 切換到下一個 face，並把 quarter 重設為 1
+    addi t1, t1, 1
+    sb   t1, 9(t0)
+    li   t2, 1
+    sb   t2, 10(t0)
+    j    expand_todo  
+    
+expand_skip_same_face:
+    addi t1, t1, 1
+    sb   t1, 9(t0)       # next_face++
+    li   t2, 1
+    sb   t2, 10(t0)      # next_quarter = 1
+    j    expand_todo  
+
+expand_cursor_updated: 
+   
+    # q=1 從原 state 開始；q=2、3 從上一次的 turned 繼續
+    li   t3, 1
+    beq  s5, t3, expand_turn_from_state
+    lhu  a0, 4(t0)              # turned.p_rank
+    lhu  a1, 6(t0)              # turned.o_rank
+    j    expand_apply_quarter
+    
+expand_turn_from_state:   
+    lhu  a0, 0(t0)              # state.p_rank
+    lhu  a1, 2(t0)              # state.o_rank
+
+expand_apply_quarter: 
+    #    a0 : turned.p_rank, a1: turned.o_rank
+    mv   a4, s4                 # face
+    li   a5, 1                  # 每次只轉一個 quarter
+    jal  ra, HTM_Move           # 進到 HTM_Move 的迴圈
+    
+    # helper 會改寫 t0，重新取得父 frame 位址
+    slli t0, s0, 3
+    slli t1, s0, 2
+    add  t0, t0, t1
+    add  t0, s3, t0  # t0 = frame address
+    
+    # 保存目前 face 已轉到的狀態，供 q=2、3 使用
+    sh   a0, 4(t0)
+    sh   a1, 6(t0)
+    
+    # stack 有 16 個 frame，索引最大為 15
+    li   t1, 15
+    bgeu s0, t1, expand_todo
+    
+    # solution_path[top] = face * 3 + quarter - 1
+    la   t0, solution_path
+    add  t0, t0, s0
+    slli t1, s4, 1
+    add  t1, t1, s4
+    add  t1, t1, s5
+    addi t1, t1, -1
+    sb   t1, 0(t0)
+
+    # push child：top 加一後計算 child frame 位址
+    addi s0, s0, 1
+    slli t0, s0, 3
+    slli t1, s0, 2
+    add  t0, t0, t1
+    add  t0, t0, s3
+
+    sh   a0, 0(t0)               # child state.p_rank
+    sh   a1, 2(t0)               # child state.o_rank
+    sh   a0, 4(t0)               # child turned.p_rank 初值
+    sh   a1, 6(t0)               # child turned.o_rank 初值
+    sb   s4, 8(t0)               # child last_face
+    sb   zero, 9(t0)             # child next_face = 0
+    li   t1, 1
+    sb   t1, 10(t0)              # child next_quarter = 1
+    sb   zero, 11(t0)            # child entered = 0
+
+    j    ida_visit
+    
+    
+expand_pop:
+    addi s0, s0, -1
+    blt  s0, zero, ida_round_finished
+    j    ida_visit
+    
+# -------------------------------------------------  
+
+cutoff:
+    # s2 = min(s2, f)
+    bgeu t3, s2, pop_frame
+    mv   s2, t3
+
+pop_frame:
+    addi s0, s0, -1
+    blt  s0, zero, ida_round_finished   # root 被 pop，這輪搜尋結束
+    j    ida_visit
+
+# 對應 solve_state 中 while (bound <= MAX_DEPTH)
+ida_round_finished:
+    li   t0, 255
+    beq  s2, t0, done          # 本輪沒有更大的 cutoff 值，搜尋結束
+
+    mv   s1, s2                 # 下一輪 bound = 最小的超界 f
+    li   t0, 11
+    bltu t0, s1, done            # bound > 11，停止
+    li   s2, 255                 # 重設 next_bound
+    li   s0, 0                   # 回到 root
+
+    # 重設 root frame 的搜尋游標與狀態
+    sb   zero, 9(s3)             # next_face = 0
+    li   t0, 1
+    sb   t0, 10(s3)              # next_quarter = 1
+    sb   zero, 11(s3)            # entered = 0
+
+    lhu  t1, 0(s3)
+    lhu  t2, 2(s3)
+    sh   t1, 4(s3)               # turned.p_rank = root.p_rank
+    sh   t2, 6(s3)               # turned.o_rank = root.o_rank
+
+    j    ida_visit
+    
+solved:
+    # 找到解；目前 s0 是找到時的深度
+    
+    mv   s6, s0                 # s6 = 解答長度
+    li   s7, 0                  # s7 = path index
+    j    print_move_loop
+
+# ----------------------------------------------------
 
 # herustatic 查表
-# 輸入：
-#     a0 = p_rank
-#     a1 = o_rank
-#
-# 輸出：
-#     a0 = max(p_pdb[p_rank], o_pdb[o_rank])
+# 輸入：a0 = p_rank, a1 = o_rank
+# 輸出：a0 = max(p_pdb[p_rank], o_pdb[o_rank])
 coord_heuristic:
     la   t0, p_pdb
     add  t0, t0, a0
-    lbu  t2, 0(t0)
-    
-    la   t0, o_pdb 
-    add  t0, t0, a1
-    lbu  t3, 0(t0)
-    
-    bgeu t2, t3, p_heruistic_larger
-    
-    
-    
-    mv   a0, t3  
-    ret
+    lbu  t1, 0(t0)
 
-p_heruistic_larger:
+    la   t0, o_pdb
+    add  t0, t0, a1
+    lbu  t2, 0(t0)
+
+    bgeu t1, t2, heuristic_use_p
     mv   a0, t2
     ret
-    
-    
+
+heuristic_use_p:
+    mv   a0, t1
+    ret
+
+
+# stack 初始化
+stack_initialization:
+    sh   a0, 0(s3)              # state.p_rank
+    sh   a1, 2(s3)              # state.o_rank
+    sh   a0, 4(s3)              # turned.p_rank
+    sh   a1, 6(s3)              # turned.o_rank
+
+    li   t0, 3
+    sb   t0, 8(s3)              # last_face：root sentinel
+    sb   zero, 9(s3)            # next_face
+    li   t0, 1
+    sb   t0, 10(s3)             # next_quarter
+    sb   zero, 11(s3)           # entered
+    ret
+
 # HTM Move，R 就查一次表 transition_table，R2 查兩次，R' 查三次
 # 輸入：
-#     a0 = p_rank
-#     a1 = o_rank
-#     a4 = face：0=R、1=B、2=D
-#     a5 = quarter-turn 次數：1、2、3
-# 
+#   a0 = p_rank
+#   a1 = o_rank
+#   a4 = face：0=R、1=B、2=D
+#   a5 = quarter-turn 次數：1、2、3
 # 輸出：
-#     a0 = 轉動後 p_rank
-#     a1 = 轉動後 o_rank
+#   a0 = 新 p_rank
+#   a1 = 新 o_rank
 HTM_Move:
-    
-      # 查看 face 是哪個
-      li   t1, 0    
-      beq  t1, a4, R_face
-   
-      li   t1, 1
-      beq  t1, a4, B_face
-      
-      li   t1, 2
-      beq  t1, a4, D_face
-      
-      ret 
+    li   t0, 0
+    beq  a4, t0, R_face
+    li   t0, 1
+    beq  a4, t0, B_face
+    li   t0, 2
+    beq  a4, t0, D_face
+    ret                         # 無效 face
+
 R_face:
-      la   a2, p_transition_R  # a2 : p_transition table
-      la   a3, o_transition_R  # a3 : o_transition table
-      mv   a6, a5              # a6 = 剩餘的 quarter-turn 次數
-      
-      j    HTM_loop
+    la   a2, p_transition_R
+    la   a3, o_transition_R
+    j    HTM_start
+
 B_face:
-      la   a2, p_transition_B
-      la   a3, o_transition_B
-      mv   a6, a5         
-      
-      j    HTM_loop
+    la   a2, p_transition_B
+    la   a3, o_transition_B
+    j    HTM_start
+
 D_face:
-      la   a2, p_transition_D
-      la   a3, o_transition_D
-      mv   a6, a5         
+    la   a2, p_transition_D
+    la   a3, o_transition_D
+
+HTM_start:
+    beq  a5, zero, HTM_return
+    li   t0, 3
+    bltu t0, a5, HTM_return     # 次數大於 3 就返回
+
+    mv   a6, a5
+
 HTM_loop:
-      slli t0, a0, 1            # p_rank * 2
-      add  t0, t0, a2           # t0 轉變成 p_transition 實際起始位置
-      slli t1, a1, 1            # o_rank * 2
-      add  t1, t1, a3           # t1 轉變成 o_transition 實際起始位置
-      lhu  a0, 0(t0)            # p_transition 實際起始位置往後讀 2 byte
-      lhu  a1, 0(t1)            # o_transition 實際起始位置往後讀 2 byte
-      addi a6, a6, -1           # 扣一次 loop 次數
-      bne  a6, x0, HTM_loop
-    
+    slli t0, a0, 1
+    add  t0, t0, a2
+    lhu  a0, 0(t0)
+
+    slli t1, a1, 1
+    add  t1, t1, a3
+    lhu  a1, 0(t1)
+
+    addi a6, a6, -1
+    bne  a6, zero, HTM_loop
+
+HTM_return:
     ret
     
-# 初始化 stack 第一個 element - 初始狀態
-# sh (store half)
-stack_initialization:
-      la   t0, search_stack
-        
-      sh   a0, 0(t0)      # 把 a0 的低 16 bits 寫到 t0 + FRAME_STATE_P 的位置
-      sh   a1, 2(t0)
-      sh   a0, 4(t0)     
-      sh   a1, 6(t0)
+# ----------------------------------------------------
 
-      li   t1, 3                      # 用不屬於有效面編號的 3，否則第一步選 D 時會被誤認為同面連轉
-      sb   t1, 8(t0)
-      sb   zero, 9(t0)
-      li   t1, 1                      # 從 quarter 1 開始；設成 0 會產生無效的轉動次數
-      sb   t1, 10(t0)
-      sb   zero, 11(t0)
+print_move_loop:
+    bgeu s7, s6, print_newline
 
-      li   s0, 0                  # top = 0，指向 root frame
-    
-    ret
+    la   t0, solution_path
+    add  t0, t0, s7
+    lbu  s5, 0(t0)              # s5 = move code 0..8
+
+    # 解碼 face，並將 s5 化為 quarter 後綴索引 0..2
+    li   t1, 3
+    bltu s5, t1, print_R
+
+    li   t1, 6
+    bltu s5, t1, print_B
+
+    addi s5, s5, -6             # D：code 6..8 -> 0..2
+    li   a0, 68                  # ASCII 'D'
+    j    print_face
+
+print_R:
+    li   a0, 82                  # ASCII 'R'
+    j    print_face
+
+print_B:
+    addi s5, s5, -3             # B：code 3..5 -> 0..2
+    li   a0, 66                  # ASCII 'B'
+
+print_face:
+    li   a7, 11
+    ecall
+
+    # 後綴：0 不輸出，1 輸出 2，2 輸出 apostrophe
+    beq  s5, zero, print_separator
+    li   t1, 1
+    beq  s5, t1, print_two
+
+    li   a0, 39                  # ASCII apostrophe '
+    j    print_suffix
+
+print_two:
+    li   a0, 50                  # ASCII '2'
+
+print_suffix:
+    li   a7, 11
+    ecall
+
+print_separator:
+    addi t1, s7, 1
+    bgeu t1, s6, next_move
+    li   a0, 32                  # ASCII space
+    li   a7, 11
+    ecall
+
+next_move:
+    addi s7, s7, 1
+    j    print_move_loop
+
+print_newline:
+    li   a0, 10
+    li   a7, 11
+    ecall
+    j    done
+
 
 done:
     li   a7, 10
