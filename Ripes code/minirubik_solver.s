@@ -2570,6 +2570,12 @@ solution_path:
 # 這個測資對應 p_rank=9、o_rank=16，解答是 B'
 input_state:
     .string "12356741112323"
+    
+verify_pass_msg:
+    .string "T5 PASS\n"
+
+verify_fail_msg:
+    .string "T5 FAIL\n"
 
 # 解析後的七個角塊編號與朝向
 state_p:
@@ -2597,6 +2603,8 @@ main:
     jal  ra, string_to_state_p
     jal  ra, string_to_state_o
     jal  ra, parse_state
+    beq  a0, zero, done       # 非法輸入直接結束
+    
     li   s0, 0                  # 重設 s0 計數器
     li   a0, 0                  # 初始化 p_rank
     li   a1, 0                  # 初始化 o_rank
@@ -2641,7 +2649,7 @@ string_to_state_o:
     add  t0, t0, s0        # 加到目前第 s0 個數字
     la   t1, state_o
     add  t1, t1, s0        # 加到 state_o 目前第 s0 個數字
-    addi t1, t1, -6        # 因為此時 s0 已經從 6 開始，需要先扣掉
+    addi t1, t1, -7        # 因為此時 s0 已經從 7 開始，需要先扣掉
     lbu  t2, 0(t0)         # 讀出 input_state 第一個數字的 ASCII
     addi t2, t2, -49       # 取得字元代表的數字, 49 為 1 的 ASCII
     sb   t2, 0(t1)         # 寫入 state_p 的第 s0 - 6 個element
@@ -2652,42 +2660,159 @@ string_to_state_o:
     ret
 
 parse_state:
-    # 如果 s0  不等於 13 代表 state 解析一定有問題
+    # 如果 s0  不等於 14 代表 state 解析一定有問題
+    la   t0, input_state
+    lbu  t1, 14(t0)
+    bne  t1, zero, parse_state_error
     
+    li   s1, 7          #  C = 7
+    la   s2, state_p    # addr of state_p
+    la   s3, state_o    # addr of state_o
+    li   s4, 3          # s4 = 3
+    
+    li   a0, 0     #  unsigned seen = 0;
+    li   a1, 0     #  unsigned o_sum = 0;
+    li   a2, 0     #  for (int i = 0; i < C; ++i)
+    
+ 
+parse_state_loop:
+     # i >= 7，開始檢查朝向總和
+    bgeu a2, s1, parse_state_o_sum_check  
+    
+    # a3 = p = (unsigned)(text[i] - '1');
+    # a4 = o = (unsigned)(text[i + C] - '1');
+    lb   a3, 0(s2)
+    addi s2, s2, 1    
+    lb   a4, 0(s3)
+    addi s3, s3, 1
+    
+    # if (p >= C || o >= 3)
+    bgeu a3, s1, parse_state_error
+    bgeu a4, s4, parse_state_error
+    
+    # if((seen >> p) & 1U)
+    srl  t1, a0, a3       # 暫存 seen >> p，保留原本 seen
+    andi t1, t1, 1        # 只取最低 bit
+    bne  t1, zero, parse_state_error
+    
+    # seen |= (1U << p);
+    li   t0, 1
+    sll  t0, t0, a3
+    or   a0, a0, t0
+    
+    # o_sum += o;
+    add  a1, a1, a4       # o_sum += o
+    addi a2, a2, 1        # i++
+    bgeu a2, s1, parse_state_o_sum_check
+    j    parse_state_loop
+    
+parse_state_o_sum_check:
+    # 一直減三減到小於等於 0 ，小於 0 的話直接 error
+    # 要先排除不足 3 的非零餘數。
+    beq  a1, zero, parse_state_done
+    li   t0, 3
+    bltu a1, t0, parse_state_error
+    addi a1, a1, -3
+    j    parse_state_o_sum_check
+    
+parse_state_done:
+    li   a0, 1
     ret
+        
+    
+parse_state_error:
+    li   a0, 0
+    ret    
+    
+
+
+
+    
+# --------------- rank_permutation -----------------
     
 rank_permutation:
-    
-    #    a0 = p
-    #    s0 = 迴圈計數器 = for (uint8_t i = 0; i < C; ++i) 的 i
-    li   t0, 0                 # uint8_t smaller = 0;
-    lb   t1, 0(s0)             # uint8_t j = (uint8_t) (i + 1U); j < C; ++j 的 j
-    addi t1, t1, 1
-    jal  ra, p_state_smaller   # 會回傳 t0
-    
-    # p = p * (C - i) + smaller = p * C - p * i + smaller;
-    lhu  t2, 0(t0)             # t2 = p
-    slli a0, a0, 3             # a0 * 8
-    sub  a0, a0, t2            # a0 = p * 8 - p = p * 7
-    
-    
-    addi s0, s0 ,1
-    li   t0, 13
-    bleu s0, t0, rank_permutation
+
+    mv   a4, ra                  # Save the caller's return address
+    la   a2, state_p             # Base address of state_p
+    li   a0, 0                   # rank = 0
+    li   a3, 0                   # i = 0
+
+rank_permutation_loop:
+    li   t0, 0                   # smaller = 0
+    addi t1, a3, 1               # j = i + 1
+    jal  ra, p_state_smaller      # Return smaller in t0
+
+    # Compute old_rank * (7 - i) using repeated addition
+    li   t1, 7
+    sub  t1, t1, a3              # multiplier = 7 - i
+    mv   t2, a0                  # Save the old rank
+    li   a0, 0                   # Product accumulator = 0
+
+rank_permutation_multiply:
+    beq  t1, zero, rank_permutation_accumulate
+    add  a0, a0, t2              # Add the old rank once
+    addi t1, t1, -1
+    j    rank_permutation_multiply
+
+rank_permutation_accumulate:
+    add  a0, a0, t0              # rank = product + smaller
+    addi a3, a3, 1               # i++
+    li   t1, 7
+    bltu a3, t1, rank_permutation_loop
+
+    mv   ra, a4                  # Restore the caller's return address
     ret
 
+# Input: a2 = array base, a3 = i, t1 = j, t0 = 0
+# Output: t0 = number of elements smaller than p[i]
+# Preserves a2, a3, a4
 p_state_smaller:
-    
-    
+    add  t2, a2, a3
+    lbu  t2, 0(t2)               # t2 = p[i]
+    li   t4, 7
+
+p_state_smaller_loop:
+    bgeu t1, t4, p_state_smaller_done
+
+    add  t3, a2, t1
+    lbu  t3, 0(t3)               # t3 = p[j]
+    bgeu t3, t2, p_state_smaller_next
+
+    addi t0, t0, 1               # p[j] < p[i]: smaller++
+
+p_state_smaller_next:
+    addi t1, t1, 1               # j++
+    j    p_state_smaller_loop
+
+p_state_smaller_done:
     ret
 
-p_state_times_i:
-    
-    ret
 
+# --------------- rank_permutation -----------------
+
+# Input: state_o contains valid orientation values, each 0..2
+# Output: a1 = orientation rank, 0..728
+# Preserves a0 and s0..s11
+# Clobbers t0..t4
 rank_orientation:
-    
+    la   t0, state_o             # Base address of state_o
+    li   a1, 0                   # rank = 0
+    li   t1, 0                   # i = 0
+
+rank_orientation_loop:
+    lbu  t2, 0(t0)               # t2 = state_o[i]
+
+    slli t3, a1, 1               # t3 = old_rank * 2
+    add  a1, t3, a1              # rank = old_rank * 3
+    add  a1, a1, t2              # rank += state_o[i]
+
+    addi t0, t0, 1               # Advance to the next byte
+    addi t1, t1, 1               # i++
+    li   t4, 6
+    bltu t1, t4, rank_orientation_loop
     ret
+    
+# --------------- ida_visit -----------------    
 
 ida_visit: 
     # 進行 ida visit
@@ -2726,7 +2851,7 @@ ida_visit:
     li   t1, 1
     sb   t1, 11(t0)
     
-# -------------------------------------------------    
+# ---------------- expand_todo ----------------------    
     
 expand_todo:
     # 下一步會在這裡加入 move 選擇、產生 child frame 與 push。
@@ -2901,12 +3026,6 @@ ida_round_finished:
 
     j    ida_visit
     
-solved:
-    # 找到解；目前 s0 是找到時的深度
-    
-    mv   s6, s0                 # s6 = 解答長度
-    li   s7, 0                  # s7 = path index
-    j    print_move_loop
 
 # ----------------------------------------------------
 
@@ -3000,7 +3119,79 @@ HTM_loop:
 HTM_return:
     ret
     
-# ----------------------------------------------------
+# ---------------- verify_solution -----------------------
+
+solved:
+    # 找到解；目前 s0 是找到時的深度
+    
+    mv   s6, s0                 # Save the solution length
+    j    verify_solution
+
+verify_solution:
+    li   s8, 0                  # Verification status: 0 = failed
+    li   s7, 0                  # Index in solution_path
+
+    li   t0, 11
+    bltu t0, s6, verify_failed   # Reject an invalid path length
+
+    lhu  a0, 0(s3)              # Original p_rank in the root frame
+    lhu  a1, 2(s3)              # Original o_rank in the root frame
+
+verify_move_loop:
+    bgeu s7, s6, verify_check    # Check the result after all moves
+
+    la   t0, solution_path
+    add  t0, t0, s7
+    lbu  t2, 0(t0)              # Move code: 0..8
+
+    li   t3, 9
+    bgeu t2, t3, verify_failed   # Reject an invalid move code
+
+    # Decode the face and quarter-turn count
+    li   t3, 3
+    bltu t2, t3, verify_face_R
+
+    li   t3, 6
+    bltu t2, t3, verify_face_B
+
+    li   a4, 2                  # D: codes 6..8
+    addi a5, t2, -5             # Quarter-turn count: 1..3
+    j    verify_apply_move
+
+verify_face_R:
+    li   a4, 0                  # R: codes 0..2
+    addi a5, t2, 1              # Quarter-turn count: 1..3
+    j    verify_apply_move
+
+verify_face_B:
+    li   a4, 1                  # B: codes 3..5
+    addi a5, t2, -2             # Quarter-turn count: 1..3
+
+verify_apply_move:
+    jal  ra, HTM_Move           # Update both ranks
+    addi s7, s7, 1              # Advance to the next move
+    j    verify_move_loop
+
+verify_check:
+    or   t0, a0, a1
+    bne  t0, zero, verify_failed # Both ranks must be zero
+
+    li   s8, 1                  # Verification passed
+    la   a0, verify_pass_msg
+    li   a7, 4                  # Print string
+    ecall
+
+    li   s7, 0                  # Restart the index for printing
+    j    print_move_loop
+
+verify_failed:
+    li   s8, 0                  # Verification failed
+    la   a0, verify_fail_msg
+    li   a7, 4                  # Print string
+    ecall
+    j    done
+
+# ---------------- print output -----------------------
 
 print_move_loop:
     bgeu s7, s6, print_newline
