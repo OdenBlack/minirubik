@@ -1,8 +1,3 @@
----
-title: Computer Architecture HW1
-
----
-
 # Computer Architecture HW1
 
 [![hackmd-github-sync-badge](https://hackmd.io/c43Q04SMTwqe-6_phvXkZw/badge)](https://hackmd.io/c43Q04SMTwqe-6_phvXkZw)
@@ -23,7 +18,7 @@ fork sysprog21/minirubik SHA :      3811ad0a87bd490e45099c3cb179ec33caf46cb5
 
 Ripes:
 
-Ripes version :                     Continuous release
+Ripes version :                     v2.2.6-106-g5b8a616
 Processor :                         RV32_ISS (ISA simulator)、RV32_5S (5-stage processor)
 Instruction Set :                   RV32I
 ```
@@ -143,7 +138,7 @@ static const uint8_t twist[3][CUBIES] = {
 
 * Host-bytes-per-guest-byte: Ripes(guest) 在主機上 (host) 為每個 guest memory byte 額外用了多少記憶體，即 host bytes ÷ guest bytes
     * 作法 : 利用 power shall 指令  ``` Get-Process -Name Ripes | Select-Object Id, PrivateMemorySize64 ``` 獲取執行前與執行後 Ripes 的 private bytes ，相減後得到不同 Guest size 之下的 Private Bytes，然後將不同 case 的 Private Bytes 與 Guest size 相除。
-    * 下表為不同寫入大小所產生的 Private Bytes 以及 Host-bytes-per-guest-byte。由結果可知，隨著寫入大小的上升，比例隨測試區域變大而下降，表示每次執行都存在一部分固定開銷，因此取寫入大小為 262144 以及 65536 bytes 的結果，重新計算 Host-bytes-per-guest-byte
+    * 下表分別為 RV32_ISS 與 RV32_5S 對不同寫入大小所產生的 Private Bytes 以及 Host-bytes-per-guest-byte。由結果可知，隨著寫入大小的上升，比例隨測試區域變大而下降，表示每次執行都存在一部分固定開銷，因此取寫入大小為 262144 以及 65536 bytes 的結果，重新計算 Host-bytes-per-guest-byte
     
 | Guest size (bytes)| pre - executed Private Bytes | post - executed Private Bytes | difference | Host-bytes-per-guest-byte (bytes/guest bytes)|
 | :-: | :-: | :-: | :-: | :-: |
@@ -154,15 +149,21 @@ static const uint8_t twist[3][CUBIES] = {
 
 $$ R_{\text{Hby/Gby, ISS}} = \frac{ 22470656 - 6148096 }{ 262144 - 65536 } = 83 \text{  bytes/guest bytes} $$
 
+| Guest size (bytes)| pre - executed Private Bytes | post - executed Private Bytes | difference | Host-bytes-per-guest-byte (bytes/guest bytes)|
+| :-: | :-: | :-: | :-: | :-: |
+| 4096  | 70508544 | 76513280 | 6004736 | 1466 |
+| 16384  | 70467584 | 76857344 | 6389760 | 390 | 
+| 65536 | 69922816  | 83906560 | 13983744 | 213.4 |
+| 262144 | 70533120  | 117542912 | 47009792 | 179.3 |
 
-
+$$ R_{\text{Hby/Gby, 5s}} = \frac{ 47009792 - 13983744 }{ 262144 - 65536 } \approx 167 \text{  bytes/guest bytes} $$
 
 
 * retired-instructions-per-second: Ripes 每秒能模擬執行多少條指令 = instructions/second
     * 作法: 透過在 powershall 執行 ```--exectime``` 以及 ```--iret``` 直接獲取執行次數分別為 0 以及為 65536 的執行時間 $t_{0}、t_{65536}$，與 retired instruction $I_{0}、I_{65536}$ ，透過以下計算獲取 host-bytes-per-guest-byte ratio $R$
 
 $$
-R = \frac{I_{65536}-I_{0}}{t_{65536} - t_{0}}
+R_{iret} = \frac{I_{65536}-I_{0}}{t_{65536} - t_{0}}
 $$
 
 | times | retired instruction | 執行時間(ms) |
@@ -171,7 +172,16 @@ $$
 | 65536 | 327692 | 22 |
 
 $$
-R = \frac{I_{65536}-I_{0}}{t_{65536} - t_{0}} = \frac{327692-12}{0.022 - 0} \approx 14.9 \times10^9 \text{  retired instruction/s}
+R_{iret, ISS} = \frac{I_{65536}-I_{0}}{t_{65536} - t_{0}} = \frac{327692-12}{0.022 - 0} \approx 14.9 \times10^6 \text{  retired instruction/s}
+$$
+
+| times | retired instruction | 執行時間(ms) |
+| :-: | :-: | :-: |
+| 0 | 11 | 1 |
+| 65536 | 327691 | 1143 |
+
+$$
+R_{iret, 5s} = \frac{I_{65536}-I_{0}}{t_{65536} - t_{0}} = \frac{327691-12}{1.143 - 0} \approx 14.9 \times10^6 \text{  retired instruction/s}
 $$
 			
 
@@ -220,9 +230,9 @@ $$
 
 ### 2-3 Choose IDA* and take permutation & orientation table as pattern database
 
-我們選擇將 `p[CUBIES]` `o[CUBIES]`作為我們的 pattern database ( PDB )，分開建表以降低因 3674160 種狀態所帶來的較大記憶體開銷。兩種表皆可算出各自的 $h(s)$，分別為 $h_{p}(s)$ 與 $h_{o}(s)$，最後本倫次所選擇的 $h(s)$ 必須取嚴格上界，即$$h(s) = \max(h_o, h_p)$$
+我們選擇將 `p[CUBIES]` `o[CUBIES]`作為我們的 pattern database ( PDB )，分開建表以降低因 3674160 種狀態所帶來的較大記憶體開銷。兩種表皆可算出各自的 $h(s)$，分別為 $h_{p}(s)$ 與 $h_{o}(s)$，最後本輪次所選擇的 $h(s)$ 必須取實際剩餘距離的下界，即$$h(s) = \max(h_o, h_p)$$
 
-$h(s)$ 依然是 Admissible，並且相較於單純只使用 orientation table 或者 permutation table，heuristic 下界大幅收緊，IDA* 展開的節點數會大幅減少，搜尋速度大幅飆升。並且在原版 BFS中，`toward_solved` 的大小約為 3.67 MiB， `queue` 的大小約為 51.4 MiB，總和約為 55 MiB，而在 IDA* 中，`o_pdb` 約為 729 Bytes `p_pdb` 約為 5,040 B ，總和約為 5.7 KiB，記憶體開銷大幅下降。因此，接下來我們選擇 IDA* 並配合 permutation & orientation 的 PDB 以修剪原 searching tree，作為我們優化 solver.c 的方向。
+$h(s)$ 依然是 Admissible，並且相較於單純只使用 orientation table 或者 permutation table，heuristic 下界大幅收緊，IDA* 展開的節點數會大幅減少，搜尋速度大幅飆升。並且在原版 BFS 中，`toward_solved` 的大小約為 3.504 MiB， `queue` 的大小約為 14.016 MiB，總和約為 17.553 MiB，而在 IDA* 中，`o_pdb` 約為 729 Bytes `p_pdb` 約為 5,040 B ，總和約為 5.7 KiB，記憶體開銷大幅下降。因此，接下來我們選擇 IDA* 並配合 permutation & orientation 的 PDB 以修剪原 searching tree，作為我們優化 solver.c 的方向。
 
 
 
@@ -399,7 +409,7 @@ static int ida_dfs(state_t s, int g, int bound, int last_f, int *next_bound) {
 
 * H1 - Heuristic admissibility: 主要測試所有 3,674,160 個狀態是否皆合法，對每個狀態比較 `h(s) = max(h_p(s), h_o(s))` 與 BFS oracle 的精確距離 `d(s)`
 ![image](https://hackmd.io/_uploads/Bym9ran5Gx.png)
-由上述結果可知，全部狀態皆合法
+由上述結果可知，所有狀態皆滿足
 
 * H2 - PDB 完整性 : 主要測試兩張 PDB 的所有 entry 是否都已填入，以及 solved entry 是否為 0。詳細測試細節於 verify_ida.c 中的 `check_pdb`。以下展示測試結果![image](https://hackmd.io/_uploads/ryB68Th9fx.png)
 由上述結果可知，兩種 PDB 皆已填入，並且permutation 以及 orientation 的最大深度分別為 7 與 6
@@ -491,7 +501,7 @@ static void init_transition_tables(void)
 可以從 transition pair calls 與原本的 ida_dfs calls 數量相同的結果，來確認搜尋樹的結構未改變，但是因為改用查詢 transition table 的方式，H3 的速度大幅上升，側面驗證目前的 IDA_solver_improv.c 在執行的時間有了顯著的加快
 
 ---
-* 改為非遞迴搜尋: RV32_ISS 無法進行遞迴，因此我們將修正原本 ida_dfs 中透過呼叫遞迴來探索 searching tree 的作法，透過呼叫一個 stack 來保存每一次動作的紀錄與探索狀況
+* 改為非遞迴搜尋: RV32_ISS 在作業說明嚴格禁止遞迴搜尋，因此我們將修正原本 ida_dfs 中透過呼叫遞迴來探索 searching tree 的作法，透過呼叫一個 stack 來保存每一次動作的紀錄與探索狀況
 
 首先，我們將每個魔術方塊的執行動作都以一個 frame 為單位，結構如下
 ```clike=
@@ -533,7 +543,7 @@ typedef struct {
 本段落將實作 c code 的 RV32I 轉譯，首先會將`p_pdb`、`o_pdb`、`p_transition`、`o_transition` 作為靜態資料輸出。然後將搜尋的部分轉譯成 RV32I
 
 ### 4.1 Output of pdb & transition table
-額外在 IDA_solver_improv.c 的 main 中新增了能輸出 `p_pdb`、`o_pdb`、`p_transition`、`o_transition` 的指令，使用 `--output_table` 進行，將會輸出含有 .data 部分的 .s 檔，以供接下來的 RV32I 轉譯作使用
+額外在 IDA_solver_improv.c 的 main 中新增了能輸出 `p_pdb`、`o_pdb`、`p_transition`、`o_transition` 的指令，使用 `--minirubik_table_output` 進行，將會輸出含有 .data 部分的 .s 檔，以供接下來的 RV32I 轉譯作使用
 
 上述的 `p_pdb`、`o_pdb`、`p_transition`、`o_transition`，所占記憶體分別為 5040 bytes、729 bytes、30240 bytes、4374 bytes，總和(加上 o_pdb 的 1 bytes padding)為 40384 bytes 
 
@@ -544,7 +554,7 @@ typedef struct {
 .data 中含有以下主要的資料結構與 table，對應的占用記憶體如下表
 
 | 項目 | Bytes |
-|---|---:|
+|:--:|:--:|
 | permutation PDB | 5,040 |
 | orientation PDB | 729 |
 | permutation transitions | 30,240 |
@@ -552,13 +562,14 @@ typedef struct {
 | search_stack：16 × 12 | 192 |
 | solution_path | 11 |
 | state_p 、 state_o | 14 |
+|4 KiB padding|4|
 
 ---
 
 ### 4.3 Workflow in minirubik_solver.s
 
 我們將 IDA_solver_improv.c 轉譯成 RV32I，其成果置於.\Ripes code\minirubik_solver.s 裡。整體流程可以大致分為如下
-1. 由 IDA_solver_improv.c 透過 `.\IDA_solver_improv_v3.exe --minirubik_table_output` 在 .\Ripes code 資料夾中輸出含有上述四種 table 的 minirubik_table.s
+1. 由 IDA_solver_improv.c 透過 `.\IDA_solver_improv.exe --minirubik_table_output` 在 .\Ripes code 資料夾中輸出含有上述四種 table 的 minirubik_table.s
 2. minirubik_solver.s 紀錄 minirubik_table.s 中的 table 資訊於 .data 區域，隨後配置所需陣列:  `search_stack` `solution_path` `input_state` `state_p` `state_o`
 3. 在 main 中透過呼叫 function `string_to_state_p` `string_to_state_o`  來將 `input_state` 的 state 資訊儲存在 `state_p` `state_o` 中，並呼叫  `parse_state` 檢驗合法性
 4. 透過呼叫 `rank_permutation` `rank_orientation` 來將 state 編碼成 p_rank 以及 o_rank
@@ -600,7 +611,7 @@ typedef struct {
 
 * 由於 RV32I 中並沒有乘法運算，因此我們實現 p = p * (C - i) + smaller 的方法大致如下: 首先設定一個乘法次數計數器 multiplier，然後進入 `rank_permutation_multiply` 進行重複加法，直到 multiplier 達到目標累加次數，加上 smaller 後離開內層迴圈。
 
-* 在 `rank_orientation` 中，設定初值後進入迴圈計算 rank = rank * 3 + state->o[i]，與 `rank_permutation` 類似，這邊一樣使用 `rank_orientation_loop` 進行重複加法來實現乘法
+* 在 `rank_orientation` 中，設定初值後進入迴圈計算 rank = rank * 3 + state->o[i]，這邊的乘三計算採用左移一位再加回原值
 
 ---
 
@@ -614,7 +625,7 @@ typedef struct {
     * 確認是否轉回了 solved state
     * 最後進到 `expand_todo` 進行 IDA* DFS 的例行事項
     
-* `expand_todo`的動作包含選擇 HTM move、查轉移表、寫入路徑並 push 子節點等，而如果超過門檻 next_bound 時，會進行 `cutoff` 進行剪枝，並視情況更新門檻值，最後 pop 目前節點後回到父 frame。
+* `expand_todo`的動作包含選擇 HTM move、查轉移表、寫入路徑並 push 子節點等，而如果超過門檻 bound 時，會進行 `cutoff` 進行剪枝，並視情況更新門檻值，最後 pop 目前節點後回到父 frame。
 
 ---
 
@@ -642,3 +653,18 @@ typedef struct {
     |54721631111111|76349062|
     
     * 超過 retired instructions 上限的 case 中，最大值為 "54721631111111" 的組合，retired instructions 為 76349062，約為上限的 1.53 倍
+    
+* T6 : 以 21345671111111 作為測資，回傳最佳的 11-move solution。RV32I 回傳路徑為 R B' D2 R' B R' B' R D2 R B ，路徑長度為 11，
+* T7 : 三個 test cases 都能在 `RV32_ISS` 和至少一個視覺化 pipeline model 重現。我們利用以下測資進行測試，並得出結論，在 RV32_ISS 與 5-STAGE pipeline model RV32_5S 上執行，皆能獲取相同的解路徑長度
+    * 關於測試腳本的使用，請參考 .\tests\README_T6_T7 的說明
+
+| 測資 | 輸入 | 預期解長度 | 兩個 model 的結果 |
+|---|---|---:|---|
+| 已解 | `12345671111111` | 0 | 通過 |
+| 單步 R 打亂 | `25314672313211` | 1 | 通過 |
+| T6 指定狀態 | `21345671111111` | 11 | 通過 |
+
+---
+
+## 5. Uncompleshment part
+由於時間問題，部分內容並沒有完成，包含 assembly 各階段的量測、LED Matrix 與 pipeline walkthrough、Cayley graph 與 invariants 的正式說明
